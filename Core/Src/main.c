@@ -2,8 +2,12 @@
 #include "main.h"
 #include "button.h"
 uint8_t counter = 0;
-uint32_t pulse_delay;
-uint32_t pulse_start = 0;
+
+#define HCSR04_TRIGGER_US      10U
+#define HCSR04_ECHO_TIMEOUT_MS 30U
+#define PROXIMITY_THRESHOLD_US 10000U
+
+static void delay_us(uint32_t delay_us);
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 
@@ -12,37 +16,75 @@ int main(void){
     SystemClock_Config();
     MX_GPIO_Init();
     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13); // LED PLACA
-    
+
+    // DWT fornece temporização em microssegundos sem consumir um timer periférico.
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0U;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
     while (1){
     //Aguarda o botão ser pressionado
-       if (button_release(GPIOA, GPIO_PIN_0,RESET)){
+       if (button_release(GPIOA, GPIO_PIN_0, RESET)){
+        uint32_t wait_start;
+        uint32_t echo_start_cycles;
+        uint32_t echo_us;
+
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_SET); // ACIONA O TRIGGER
-        HAL_Delay(120);
+        delay_us(HCSR04_TRIGGER_US);
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET); // LED PADRÃO SEMPRE ACESO
-        while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET){ // AGUARDA PIN ECHO IR A 1
-        pulse_start = HAL_GetTick();
-        }
-        while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET){
 
+        wait_start = HAL_GetTick();
+        while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET){
+          if ((HAL_GetTick() - wait_start) >= HCSR04_ECHO_TIMEOUT_MS){
+            break;
+          }
         }
-        if ((HAL_GetTick() - pulse_start) < 10){
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET); // LED A8 DE PROXIMIDADE
-          counter++;
+
+        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET){
+          echo_start_cycles = DWT->CYCCNT;
+          wait_start = HAL_GetTick();
+
+          while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET){
+            if ((HAL_GetTick() - wait_start) >= HCSR04_ECHO_TIMEOUT_MS){
+              break;
+            }
+          }
+
+          echo_us = (DWT->CYCCNT - echo_start_cycles) / (SystemCoreClock / 1000000U);
+
+          if ((HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET) &&
+              (echo_us < PROXIMITY_THRESHOLD_US)){
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET); // LED A8 DE PROXIMIDADE
+            counter++;
+          }
+          else {
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+          }
         }
         else {
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET); // LED A8 DE PROXIMIDADE
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
         }
       }
     }
 }
+static void delay_us(uint32_t delay_us)
+{
+    const uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+    const uint32_t start = DWT->CYCCNT;
+    const uint32_t delay_cycles = delay_us * cycles_per_us;
+
+    while ((DWT->CYCCNT - start) < delay_cycles)
+    {
+    }
+}
+
 static void MX_GPIO_Init(void) {
 
     __HAL_RCC_GPIOB_CLK_ENABLE();
     GPIO_InitTypeDef GPIO_InitStruct = {0};
     
-    GPIO_InitStruct.Pin = GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_13|GPIO_PIN_12;
+    GPIO_InitStruct.Pin = GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

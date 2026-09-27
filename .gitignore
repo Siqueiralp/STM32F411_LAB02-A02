@@ -1,0 +1,12 @@
+# STM32 build outputs
+/build/
+
+# IDE/editor metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
